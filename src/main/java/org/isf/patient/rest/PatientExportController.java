@@ -115,6 +115,27 @@ public class PatientExportController {
 	}
 
 	/**
+	 * View the {@link org.isf.patient.model.Patient} record and all the records connected to it, for on-screen
+	 * consultation (GDPR Art. 15 - right of access). Same aggregate as the export endpoint, served as JSON only.
+	 *
+	 * @param code the code of the patient whose full record is requested
+	 * @return the {@link PatientExportDTO}
+	 * @throws OHServiceException When failed to read the patient data
+	 */
+	@GetMapping(value = "/patients/{code}/full-record")
+	@Operation(description = "GDPR Art. 15 - Right of access")
+	@ApiResponse(responseCode = "200",
+		content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = PatientExportDTO.class)))
+	public ResponseEntity<PatientExportDTO> getPatientFullRecord(@PathVariable("code") int code) throws OHServiceException {
+		LOGGER.info("Get the full record for patient code: '{}'.", code);
+		PatientExport export = patientExportManager.exportPatientData(code);
+		if (export == null) {
+			throw new OHAPIException(new OHExceptionMessage("Patient not found."), HttpStatus.NOT_FOUND);
+		}
+		return ResponseEntity.ok(patientExportMapper.map2DTO(export));
+	}
+
+	/**
 	 * Whether the {@code Accept} header asks for CSV. Media types are evaluated in header order:
 	 * JSON (the default, also chosen for {@code Accept: *&#47;*} or no header) wins over a later CSV entry.
 	 */

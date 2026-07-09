@@ -199,6 +199,47 @@ class PatientExportControllerTest {
 			.andExpect(status().isNotFound());
 	}
 
+	@Test
+	@WithMockUser(username = "admin", authorities = { "patient.full_record" })
+	@DisplayName("Get the patient full record as JSON")
+	void getPatientFullRecordAsJson() throws Exception {
+		PatientExport export = setupPatientExport();
+
+		when(patientExportManager.exportPatientData(anyInt())).thenReturn(export);
+
+		mvc.perform(
+				get("/patients/{code}/full-record", 1))
+			.andDo(log())
+			.andExpect(status().isOk())
+			.andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+			.andExpect(content().json(objectMapper.writeValueAsString(patientExportMapper.map2DTO(export))))
+			.andExpect(jsonPath("$.patient").exists())
+			.andExpect(jsonPath("$.patient.blobPhoto").isEmpty())
+			.andExpect(jsonPath("$.admissions").isNotEmpty());
+	}
+
+	@Test
+	@WithMockUser(username = "admin", authorities = { "patients.read" })
+	@DisplayName("Should fail to get the patient full record without the patient.full_record permission")
+	void shouldFailToGetFullRecordWithoutPermission() throws Exception {
+		mvc.perform(
+				get("/patients/{code}/full-record", 1))
+			.andDo(log())
+			.andExpect(status().isForbidden());
+	}
+
+	@Test
+	@WithMockUser(username = "admin", authorities = { "patient.full_record" })
+	@DisplayName("Should fail to get the patient full record when the patient is not found")
+	void shouldFailToGetFullRecordWhenPatientNotFound() throws Exception {
+		when(patientExportManager.exportPatientData(anyInt())).thenReturn(null);
+
+		mvc.perform(
+				get("/patients/{code}/full-record", 1))
+			.andDo(log())
+			.andExpect(status().isNotFound());
+	}
+
 	private PatientExport setupPatientExport() throws OHException {
 		Patient patient = PatientHelper.setup();
 		patient.setCode(1);
