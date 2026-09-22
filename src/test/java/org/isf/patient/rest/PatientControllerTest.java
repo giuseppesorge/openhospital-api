@@ -22,10 +22,10 @@
 package org.isf.patient.rest;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -38,8 +38,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.log;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -48,6 +50,10 @@ import java.util.Optional;
 import org.isf.admission.data.AdmissionHelper;
 import org.isf.admission.manager.AdmissionBrowserManager;
 import org.isf.admission.model.Admission;
+import org.isf.patadminissue.dto.PatientAdminIssueDTO;
+import org.isf.patadminissue.manager.PatientAdminIssueBrowserManager;
+import org.isf.patadminissue.mapper.PatientAdminIssueMapper;
+import org.isf.patadminissue.model.PatientAdminIssue;
 import org.isf.patconsensus.manager.PatientConsensusBrowserManager;
 import org.isf.patconsensus.model.PatientConsensus;
 import org.isf.patient.data.PatientHelper;
@@ -98,7 +104,12 @@ class PatientControllerTest {
 	@Mock
 	private PatientConsensusBrowserManager patientConsensusManagerMock;
 
+	@Mock
+	private PatientAdminIssueBrowserManager patientAdminIssueManagerMock;
+
 	private final PatientMapper patientMapper = new PatientMapper();
+
+	private final PatientAdminIssueMapper patientAdminIssueMapper = new PatientAdminIssueMapper();
 
 	private MockMvc mockMvc;
 
@@ -109,7 +120,7 @@ class PatientControllerTest {
 		closeable = MockitoAnnotations.openMocks(this);
 		this.mockMvc = MockMvcBuilders
 			.standaloneSetup(new PatientController(patientBrowserManagerMock, admissionBrowserManagerMock, patientMapper,
-				patientConsensusManagerMock))
+				patientConsensusManagerMock, patientAdminIssueManagerMock, patientAdminIssueMapper))
 			.setControllerAdvice(new OHResponseEntityExceptionHandler())
 			.build();
 		ModelMapper modelMapper = new ModelMapper();
@@ -117,6 +128,7 @@ class PatientControllerTest {
 		modelMapper.addConverter(new BlobToByteArrayConverter());
 		modelMapper.addConverter(new ByteArrayToBlobConverter());
 		ReflectionTestUtils.setField(patientMapper, "modelMapper", modelMapper);
+		ReflectionTestUtils.setField(patientAdminIssueMapper, "modelMapper", modelMapper);
 	}
 
 	@AfterEach
@@ -377,6 +389,7 @@ class PatientControllerTest {
 		patientPageable.setPageInfo(PatientHelper.setParameterPage());
 		Page<PatientDTO> expectedPatientDTOList = new Page<>();
 		expectedPatientDTOList.setData(patientMapper.map2DTOList(patientList));
+		expectedPatientDTOList.getData().forEach(patientDTO -> patientDTO.setAdministrativeIssues(List.of()));
 		expectedPatientDTOList.setPageInfo(patientMapper.setParameterPageInfo(patientPageable.getPageInfo()));
 		when(patientBrowserManagerMock.getPatientsPageable(anyInt(), anyInt()))
 			.thenReturn(patientPageable);
@@ -405,6 +418,7 @@ class PatientControllerTest {
 
 		PatientDTO expectedPatientDTO = patientMapper.map2DTO(patient);
 		expectedPatientDTO.setStatus(PatientSTATUS.O);
+		expectedPatientDTO.setAdministrativeIssues(List.of());
 
 		when(patientBrowserManagerMock.getPatientById(code)).thenReturn(patient);
 
@@ -437,6 +451,7 @@ class PatientControllerTest {
 
 		PatientDTO expectedPatientDTO = patientMapper.map2DTO(patient);
 		expectedPatientDTO.setStatus(PatientSTATUS.I);
+		expectedPatientDTO.setAdministrativeIssues(List.of());
 
 		when(patientBrowserManagerMock.getPatientById(code)).thenReturn(patient);
 
@@ -609,6 +624,8 @@ class PatientControllerTest {
         }
 
         when(patientBrowserManagerMock.getPatientByCodes(anyList())).thenReturn(patientList);
+        List<PatientDTO> expectedPatientDTOList = patientMapper.map2DTOList(patientList);
+        expectedPatientDTOList.forEach(patientDTO -> patientDTO.setAdministrativeIssues(List.of()));
 
         this.mockMvc
             .perform(post(request)
@@ -616,31 +633,66 @@ class PatientControllerTest {
                 .contentType(MediaType.APPLICATION_JSON))
             .andDo(log())
             .andExpect(status().isOk())
-            .andExpect(content().string(containsString(PatientHelper.asJsonString(patientMapper.map2DTOList(patientList)))));
+            .andExpect(content().string(containsString(PatientHelper.asJsonString(expectedPatientDTOList))));
     }
 
+	/**
+	 * Test method for {@link PatientController#getPatient(int)}.
+	 *
+	 * @throws Exception
+	 */
 	@Test
-	void when_mapping_patient_then_administrative_consensus_fields_round_trip() throws Exception {
-		String reason = "Missing insurance documents";
-
-		// Patient -> PatientDTO: the administrative fields are carried and the flag is not swapped with the service flag
+	void when_get_patient_with_open_administrative_issues_then_the_PatientDTO_carries_them() throws Exception {
+		int code = 123;
+		String request = "/patients/{code}";
 		Patient patient = PatientHelper.setup();
-		patient.getPatientConsensus().setAdministrativeFlag(true);
-		patient.getPatientConsensus().setAdministrativeReason(reason);
-		patient.getPatientConsensus().setServiceFlag(false);
-		PatientDTO mappedDTO = patientMapper.map2DTO(patient);
-		assertThat(mappedDTO.isConsensusAdministrativeFlag(), is(true));
-		assertThat(mappedDTO.getConsensusAdministrativeReason(), is(reason));
-		assertThat(mappedDTO.isConsensusServiceFlag(), is(false));
+		patient.setCode(code);
+		PatientAdminIssue openIssue = new PatientAdminIssue(patient, "Identity document still to be verified");
+		openIssue.setId(7);
+		openIssue.setFromDate(LocalDateTime.of(2026, 1, 15, 18, 49, 57));
 
-		// PatientDTO -> Patient: the fields are carried back into the consensus model
-		PatientDTO patientDTO = PatientHelper.setup(patientMapper);
-		patientDTO.setConsensusAdministrativeFlag(true);
-		patientDTO.setConsensusAdministrativeReason(reason);
-		patientDTO.setConsensusServiceFlag(false);
-		Patient mappedModel = patientMapper.map2Model(patientDTO);
-		assertThat(mappedModel.getPatientConsensus().isAdministrativeFlag(), is(true));
-		assertThat(mappedModel.getPatientConsensus().getAdministrativeReason(), is(reason));
-		assertThat(mappedModel.getPatientConsensus().isServiceFlag(), is(false));
+		List<PatientAdminIssueDTO> expectedIssues = patientAdminIssueMapper.map2DTOList(List.of(openIssue));
+
+		when(patientBrowserManagerMock.getPatientById(code)).thenReturn(patient);
+		when(admissionBrowserManagerMock.getCurrentAdmission(patient)).thenReturn(null);
+		when(patientAdminIssueManagerMock.getOpenIssues(code)).thenReturn(List.of(openIssue));
+
+		this.mockMvc
+			.perform(get(request, code).contentType(MediaType.APPLICATION_JSON))
+			.andDo(log())
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.administrativeIssues", hasSize(1)))
+			.andExpect(jsonPath("$.administrativeIssues[0].id").value(7))
+			.andExpect(jsonPath("$.administrativeIssues[0].reason").value("Identity document still to be verified"))
+			.andExpect(content().string(containsString("\"administrativeIssues\":" + PatientHelper.asJsonString(expectedIssues))));
+	}
+
+	/**
+	 * Test method for {@link PatientController#getPatientByCodes(List)}.
+	 *
+	 * @throws Exception
+	 */
+	@Test
+	void when_post_patients_by_codes_then_each_PatientDTO_carries_only_its_open_administrative_issues() throws Exception {
+		String request = "/patients/by-codes";
+		Patient flagged = PatientHelper.setup();
+		flagged.setCode(1);
+		Patient clear = PatientHelper.setup();
+		clear.setCode(2);
+		PatientAdminIssue openIssue = new PatientAdminIssue(flagged, "Registration form still to be signed");
+		openIssue.setFromDate(LocalDateTime.of(2026, 1, 15, 18, 53, 17));
+
+		when(patientBrowserManagerMock.getPatientByCodes(List.of(1, 2))).thenReturn(List.of(flagged, clear));
+		when(patientAdminIssueManagerMock.getOpenIssues(List.of(1, 2))).thenReturn(List.of(openIssue));
+
+		this.mockMvc
+			.perform(post(request).contentType(MediaType.APPLICATION_JSON).content("[1, 2]"))
+			.andDo(log())
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].code").value(1))
+			.andExpect(jsonPath("$[0].administrativeIssues", hasSize(1)))
+			.andExpect(jsonPath("$[0].administrativeIssues[0].reason").value("Registration form still to be signed"))
+			.andExpect(jsonPath("$[1].code").value(2))
+			.andExpect(jsonPath("$[1].administrativeIssues", hasSize(0)));
 	}
 }

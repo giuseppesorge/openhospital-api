@@ -22,8 +22,11 @@
 package org.isf.patient.dto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import jakarta.validation.constraints.NotNull;
+
+import org.isf.patadminissue.dto.PatientAdminIssueDTO;
 
 import com.drew.lang.annotations.Nullable;
 
@@ -129,11 +132,8 @@ public class PatientDTO {
 	@Schema(description = "Consensus service flag", example = "true")
 	private boolean consensusServiceFlag;
 
-	@Schema(description = "Consensus administrative flag", example = "true")
-	private boolean consensusAdministrativeFlag;
-
-	@Schema(description = "Reason why the administration flagged the patient", maxLength = 255)
-	private String consensusAdministrativeReason;
+	@Schema(description = "Administrative issues still open on the patient", accessMode = AccessMode.READ_ONLY)
+	private List<PatientAdminIssueDTO> administrativeIssues;
 
 	public boolean isConsensusFlag() {
 		return consensusFlag;
@@ -151,20 +151,12 @@ public class PatientDTO {
 		this.consensusServiceFlag = consensusServiceFlag;
 	}
 
-	public boolean isConsensusAdministrativeFlag() {
-		return consensusAdministrativeFlag;
+	public List<PatientAdminIssueDTO> getAdministrativeIssues() {
+		return administrativeIssues;
 	}
 
-	public void setConsensusAdministrativeFlag(boolean consensusAdministrativeFlag) {
-		this.consensusAdministrativeFlag = consensusAdministrativeFlag;
-	}
-
-	public String getConsensusAdministrativeReason() {
-		return consensusAdministrativeReason;
-	}
-
-	public void setConsensusAdministrativeReason(String consensusAdministrativeReason) {
-		this.consensusAdministrativeReason = consensusAdministrativeReason;
+	public void setAdministrativeIssues(List<PatientAdminIssueDTO> administrativeIssues) {
+		this.administrativeIssues = administrativeIssues;
 	}
 
 	public int getLock() {
