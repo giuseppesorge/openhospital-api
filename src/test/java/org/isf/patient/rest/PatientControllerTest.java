@@ -28,8 +28,12 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -673,26 +677,97 @@ class PatientControllerTest {
 	 * @throws Exception
 	 */
 	@Test
-	void when_post_patients_by_codes_then_each_PatientDTO_carries_only_its_open_administrative_issues() throws Exception {
+	void when_post_patients_by_codes_then_the_open_issues_are_read_once_and_grouped_by_patient() throws Exception {
 		String request = "/patients/by-codes";
-		Patient flagged = PatientHelper.setup();
-		flagged.setCode(1);
+		Patient twiceFlagged = PatientHelper.setup();
+		twiceFlagged.setCode(1);
+		Patient onceFlagged = PatientHelper.setup();
+		onceFlagged.setCode(2);
 		Patient clear = PatientHelper.setup();
-		clear.setCode(2);
-		PatientAdminIssue openIssue = new PatientAdminIssue(flagged, "Registration form still to be signed");
-		openIssue.setFromDate(LocalDateTime.of(2026, 1, 15, 18, 53, 17));
+		clear.setCode(3);
+		PatientAdminIssue firstIssue = new PatientAdminIssue(twiceFlagged, "Registration form still to be signed");
+		firstIssue.setFromDate(LocalDateTime.of(2026, 1, 15, 18, 53, 17));
+		PatientAdminIssue secondIssue = new PatientAdminIssue(twiceFlagged, "Identity document still to be verified");
+		secondIssue.setFromDate(LocalDateTime.of(2026, 2, 1, 9, 0, 0));
+		PatientAdminIssue otherIssue = new PatientAdminIssue(onceFlagged, "Referral letter missing from the file");
+		otherIssue.setFromDate(LocalDateTime.of(2026, 2, 2, 9, 0, 0));
 
-		when(patientBrowserManagerMock.getPatientByCodes(List.of(1, 2))).thenReturn(List.of(flagged, clear));
-		when(patientAdminIssueManagerMock.getOpenIssues(List.of(1, 2))).thenReturn(List.of(openIssue));
+		when(patientBrowserManagerMock.getPatientByCodes(List.of(1, 2, 3))).thenReturn(List.of(twiceFlagged, onceFlagged, clear));
+		when(patientAdminIssueManagerMock.getOpenIssues(List.of(1, 2, 3))).thenReturn(List.of(firstIssue, secondIssue, otherIssue));
 
 		this.mockMvc
-			.perform(post(request).contentType(MediaType.APPLICATION_JSON).content("[1, 2]"))
+			.perform(post(request).contentType(MediaType.APPLICATION_JSON).content("[1, 2, 3]"))
 			.andDo(log())
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[0].code").value(1))
-			.andExpect(jsonPath("$[0].administrativeIssues", hasSize(1)))
+			.andExpect(jsonPath("$[0].administrativeIssues", hasSize(2)))
 			.andExpect(jsonPath("$[0].administrativeIssues[0].reason").value("Registration form still to be signed"))
+			.andExpect(jsonPath("$[0].administrativeIssues[1].reason").value("Identity document still to be verified"))
 			.andExpect(jsonPath("$[1].code").value(2))
-			.andExpect(jsonPath("$[1].administrativeIssues", hasSize(0)));
+			.andExpect(jsonPath("$[1].administrativeIssues", hasSize(1)))
+			.andExpect(jsonPath("$[1].administrativeIssues[0].reason").value("Referral letter missing from the file"))
+			.andExpect(jsonPath("$[2].code").value(3))
+			.andExpect(jsonPath("$[2].administrativeIssues", hasSize(0)));
+
+		verify(patientAdminIssueManagerMock, times(1)).getOpenIssues(anyCollection());
+		verify(patientAdminIssueManagerMock, never()).getOpenIssues(anyInt());
+	}
+
+	/**
+	 * Test method for {@link PatientController#getPatients(int, int)}.
+	 *
+	 * @throws Exception
+	 */
+	@Test
+	void when_get_patients_returns_an_empty_page_then_no_open_issue_is_read() throws Exception {
+		String request = "/patients";
+		PagedResponse<Patient> emptyPage = new PagedResponse<>();
+		emptyPage.setData(List.of());
+		emptyPage.setPageInfo(PatientHelper.setParameterPage());
+
+		when(patientBrowserManagerMock.getPatientsPageable(anyInt(), anyInt())).thenReturn(emptyPage);
+
+		this.mockMvc
+			.perform(get(request).contentType(MediaType.APPLICATION_JSON))
+			.andDo(log())
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data", hasSize(0)));
+
+		verify(patientAdminIssueManagerMock, never()).getOpenIssues(anyCollection());
+	}
+
+	/**
+	 * Test method for {@link PatientController#updatePatient(int, PatientDTO)}.
+	 *
+	 * @throws Exception
+	 */
+	@Test
+	void when_put_patient_with_client_supplied_administrative_issues_then_they_are_ignored() throws Exception {
+		String request = "/patients/{code}";
+		Integer code = 12345;
+		PatientDTO updatePatientDTO = PatientHelper.setup(patientMapper);
+		updatePatientDTO.setCode(code);
+		PatientAdminIssueDTO forgedIssue = new PatientAdminIssueDTO();
+		forgedIssue.setReason("Forged by the client");
+		updatePatientDTO.setAdministrativeIssues(List.of(forgedIssue));
+
+		Patient patientRead = PatientHelper.setup();
+		patientRead.setCode(code);
+		PatientConsensus patientConsensus = new PatientConsensus();
+		patientConsensus.setConsensusFlag(true);
+		patientConsensus.setPatient(patientRead);
+
+		when(patientBrowserManagerMock.getPatientById(code)).thenReturn(patientRead);
+		when(patientConsensusManagerMock.getPatientConsensusByUserId(code)).thenReturn(Optional.of(patientConsensus));
+		when(patientBrowserManagerMock.savePatient(any(Patient.class))).thenReturn(patientRead);
+
+		this.mockMvc
+			.perform(put(request, code).contentType(MediaType.APPLICATION_JSON).content(PatientHelper.asJsonString(updatePatientDTO)))
+			.andDo(log())
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.administrativeIssues", hasSize(0)));
+
+		verify(patientAdminIssueManagerMock, never()).openIssue(any());
+		verify(patientAdminIssueManagerMock, never()).saveIssues(anyList(), anyList());
 	}
 }
